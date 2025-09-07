@@ -1,0 +1,59 @@
+[9/7/2025 3:56 PM] starting bridge 
+INFO:     Started server process [692]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+[9/7/2025 3:57 PM] starting bridge 
+INFO:     Started server process [768]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+[9/7/2025 3:58 PM] starting bridge 
+INFO:     Started server process [892]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [892]
+[9/7/2025 3:59 PM] bridge exited with 0 
+[9/7/2025 3:59 PM] starting bridge 
+INFO:     Started server process [924]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [924]
+[9/7/2025 3:59 PM] bridge exited with 0 
+[9/7/2025 3:59 PM] starting bridge 
+INFO:     Started server process [984]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [984]
+[9/7/2025 3:59 PM] bridge exited with 0 
+[9/7/2025 3:59 PM] starting bridge 
+INFO:     Started server process [1008]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+ 
+[LOG] ===================================================================== 
+[LOG] Start 9/7/2025 4:09 PM 
+INFO:     Started server process [1276]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5001 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1276]
