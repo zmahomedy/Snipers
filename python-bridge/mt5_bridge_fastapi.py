@@ -295,50 +295,49 @@ async def stream_ticks(symbol: str, request: Request, _auth: None = Depends(requ
         headers={"Cache-Control":"no-cache","Connection":"keep-alive","X-Accel-Buffering":"no"},
     )
 
-# BEFORE
-# @app.get("/stream-bars")
-# async def stream_bars(symbol: str, timeframe: str, request: Request, _auth: None = Depends(require_auth)):
 
-# AFTER — add bars:int with a default
+# @app.get("/stream-bars")
+
 @app.get("/stream-bars")
 async def stream_bars(
     symbol: str,
     timeframe: str,
     request: Request,
-    bars: int = 300,                     # <-- NEW: how many history bars to bootstrap with
+    bars: int = 300,                       # NEW: allow client to choose bootstrap depth
     _auth: None = Depends(require_auth),
 ):
+    """
+    Server-Sent Events stream of bars aggregated to `timeframe`.
+    Sends:
+      - {type:'bootstrap', bars:[...]}
+      - {type:'bar-new', bar:{...}}
+      - {type:'bar-update', bar:{...}}
+    Includes '_seq' integer per message for debugging ordering.
+    """
     ensure_mt5()
     timeframe = timeframe.upper()
     if timeframe not in TF_MAP:
         raise HTTPException(400, f"unsupported timeframe {timeframe}")
 
-    # sanitize bars count
-    try:
-        bootstrap_n = max(1, min(2000, int(bars)))   # cap for safety
-    except Exception:
-        bootstrap_n = 300
-
     bucket = TF_SECONDS.get(timeframe, 60)
     mt5.symbol_select(symbol, True)
 
     async def generator():
-        # --- Bootstrap: use requested number of bars instead of hardcoded 300
-        hist = mt5.copy_rates_from_pos(symbol, TF_MAP[timeframe], 0, bootstrap_n)
-        bars_list = [bars_json(r) for r in hist] if hist is not None else []
+        # --- BOOTSTRAP ---
+        depth = max(1, min(3000, int(bars)))
+        hist = mt5.copy_rates_from_pos(symbol, TF_MAP[timeframe], 0, depth)
+        bootstrap = [bars_json(r) for r in hist] if hist is not None else []
+        bootstrap.sort(key=lambda x: x["time"])
         seq = 0
-        yield {
-            "type": "bootstrap",
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "bars": bars_list,
-            "bootstrap": bootstrap_n,     # <-- helpful for debugging
-            "_seq": seq
-        }
+        yield {"type": "bootstrap", "symbol": symbol, "timeframe": timeframe, "bars": bootstrap, "_seq": seq}
 
-        current_bar = bars_list[-1] if bars_list else None
+        # Use last bootstrap time to suppress stale/cached ticks on startup  ⬇️⬇️⬇️
+        last_boot_time = bootstrap[-1]["time"] if bootstrap else 0
+        last_tick_time = last_boot_time   # CHANGED: was 0; avoids “fake live” on closed symbols
+
+        current_bar = bootstrap[-1] if bootstrap else None
         current_bucket = (current_bar["time"] // bucket) if current_bar else None
-        last_tick = 0
+
         idle = 0.05
         hb_at = time.time() + 10
 
@@ -347,34 +346,49 @@ async def stream_bars(
                 break
 
             t = mt5.symbol_info_tick(symbol)
-            if t and int(t.time) != last_tick:
-                last_tick = int(t.time)
-                price = float(getattr(t, "last", 0) or getattr(t, "bid", 0) or 0)
-                bidx = last_tick // bucket
-
-                if (current_bucket is None) or (bidx != current_bucket):
-                    current_bucket = bidx
-                    current_bar = {
-                        "time": bidx * bucket,
-                        "open": price, "high": price, "low": price, "close": price,
-                        "volume": int(getattr(t, "volume", 0) or 0),
-                    }
-                    seq += 1
-                    yield {"type": "bar-new", "bar": current_bar, "_seq": seq}
-                    idle = 0.05
+            if t:
+                ts = int(getattr(t, "time", 0))
+                # Ignore stale/cached ticks at or before last bootstrap bar time  ⬇️⬇️⬇️
+                if ts <= last_tick_time:
+                    # No new market activity; back off a bit
+                    idle = min(idle + 0.02, 0.3)
                 else:
-                    if price > current_bar["high"]: current_bar["high"] = price
-                    if price < current_bar["low"]:  current_bar["low"]  = price
-                    current_bar["close"] = price
-                    current_bar["volume"] += int(getattr(t, "volume", 0) or 0)
-                    seq += 1
-                    yield {"type": "bar-update", "bar": current_bar, "_seq": seq}
-                    idle = 0.05
+                    last_tick_time = ts  # advance watermark
+
+                    # choose best tradable price
+                    last = float(getattr(t, "last", 0.0))
+                    bid  = float(getattr(t, "bid",  0.0))
+                    ask  = float(getattr(t, "ask",  0.0))
+                    price = last if last > 0 else (bid if bid > 0 else ask)
+
+                    if price > 0:
+                        bidx = ts // bucket
+                        if (current_bucket is None) or (bidx != current_bucket):
+                            current_bucket = bidx
+                            current_bar = {
+                                "time": bidx * bucket,
+                                "open": price, "high": price, "low": price, "close": price,
+                                "volume": int(getattr(t, "volume", 0)),
+                            }
+                            seq += 1
+                            yield {"type": "bar-new", "bar": current_bar, "_seq": seq}
+                        else:
+                            if price > current_bar["high"]: current_bar["high"] = price
+                            if price < current_bar["low"]:  current_bar["low"]  = price
+                            current_bar["close"] = price
+                            current_bar["volume"] += int(getattr(t, "volume", 0))
+                            seq += 1
+                            yield {"type": "bar-update", "bar": current_bar, "_seq": seq}
+
+                        idle = 0.05
+                    else:
+                        idle = min(idle + 0.02, 0.3)
             else:
                 idle = min(idle + 0.02, 0.3)
 
+            # Heartbeat comment (clients don't see it in onmessage)
             if time.time() >= hb_at:
-                yield {}  # heartbeat
+                yield {}
                 hb_at = time.time() + 10
 
             await asyncio.sleep(idle)
@@ -382,11 +396,7 @@ async def stream_bars(
     return StreamingResponse(
         sse_json(generator()),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
+        headers={"Cache-Control": "no-cache"}
     )
 
 # ---------- Lifespan / shutdown ----------

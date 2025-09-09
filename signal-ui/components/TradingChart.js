@@ -1,3 +1,4 @@
+// components/TradingChart.js
 "use client";
 
 import { useEffect, useRef } from "react";
@@ -8,80 +9,57 @@ import { useBarsStream } from "@/lib/useBarsStream";
 
 export default function TradingChart() {
   const containerRef = useRef(null);
-  const apiRef = useRef(null);          // { chart, series }
-  const abortRef = useRef(null);
-  const reqIdRef = useRef(0);
-  const lastBarRef = useRef(null);
-  const mountedOnceRef = useRef(false);
+  const apiRef       = useRef(null);   // { chart, series }
+  const abortRef     = useRef(null);
+  const reqIdRef     = useRef(0);
 
-  // throttle OHLC label updates to reduce React churn
-  const ohlcRafRef = useRef(0);
-  const ohlcPendingRef = useRef(null);
+  const { selectedSymbol, timeframe, setLastOHLC, setConnection } = useStore();
 
-  const {
-    selectedSymbol,
-    timeframe,
-    setLastOHLC,
-    setConnection = () => {},
-  } = useStore();
-
-  // ---- mount chart once (Strict Mode safe)
+  // mount chart once
   useEffect(() => {
-    if (mountedOnceRef.current) return;
-    mountedOnceRef.current = true;
-
     if (!containerRef.current) return;
     const { chart, series } = createChartV5(containerRef.current);
     apiRef.current = { chart, series };
 
+    const ro = new ResizeObserver(() => {
+      const el = containerRef.current;
+      if (!el || !apiRef.current) return;
+      apiRef.current.chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+    });
+    ro.observe(containerRef.current);
+
     return () => {
-      if (abortRef.current) { try { abortRef.current.abort(); } catch {} abortRef.current = null; }
+      try { ro.disconnect(); } catch {}
       try { chart.remove(); } catch {}
       apiRef.current = null;
     };
   }, []);
 
-  // ---- helper: set OHLC at most once per frame
-  const setOHLCFrameSafe = (bar) => {
-    if (!setLastOHLC) return;
-    ohlcPendingRef.current = { o: bar.open, h: bar.high, l: bar.low, c: bar.close };
-    if (ohlcRafRef.current) return;
-    ohlcRafRef.current = requestAnimationFrame(() => {
-      ohlcRafRef.current = 0;
-      const v = ohlcPendingRef.current;
-      ohlcPendingRef.current = null;
-      if (v) setLastOHLC(v);
-    });
-  };
-
-  // ---- load historical once per symbol/timeframe (single setData per load)
+  // load historical once per symbol/timeframe
   useEffect(() => {
-    if (!apiRef.current) return;
+    if (!apiRef.current || !selectedSymbol || !timeframe) return;
 
     const myReq = ++reqIdRef.current;
 
-    // cancel previous fetch
     if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    // reset tail state (no setData([]) to avoid flash)
-    lastBarRef.current = null;
+    // show we're about to connect (SSE will confirm real-time later)
     setLastOHLC?.(null);
-    setConnection?.({ state: "idle", lastMessageAt: null });
+    setConnection?.({ state: "connecting", lastError: null });
 
-    if (!selectedSymbol) return;
-    const tfBridge = TF_TO_BRIDGE[timeframe] || "H1";
+    const tf = TF_TO_BRIDGE[timeframe] || "H1";
 
     (async () => {
       try {
         const r = await fetch("/api/market", {
           method: "POST",
-          headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             type: "historical",
             symbol: selectedSymbol,
-            timeframe: tfBridge,
+            timeframe: tf,
             count: 1000,
           }),
           signal: ctrl.signal,
@@ -90,21 +68,21 @@ export default function TradingChart() {
         if (myReq !== reqIdRef.current) return;
         if (!data?.ok || !Array.isArray(data.bars)) return;
 
-        // sanitize & order
-        const clean = data.bars
-          .filter(b => b && b.time > 0 && b.open > 0 && b.high > 0 && b.low > 0 && b.close > 0)
-          .sort((a,b) => a.time - b.time);
-
+        const clean = data.bars.filter(
+          (b) => b && b.time > 0 && b.open > 0 && b.high > 0 && b.low > 0 && b.close > 0
+        );
         const seriesData = mapBarsToSeries(clean);
-        apiRef.current.series.setData(seriesData);        // <-- the only setData
+        apiRef.current.series.setData(seriesData);
+
         if (seriesData.length) {
           const last = seriesData[seriesData.length - 1];
-          lastBarRef.current = last;
-          setOHLCFrameSafe(last);
+          setLastOHLC?.({ o: last.open, h: last.high, l: last.low, c: last.close });
+          // Note: do NOT mark LIVE here; SSE will do that on first real-time tick.
         }
+
         fitAll(apiRef.current.chart);
       } catch {
-        // ignore abort/network
+        // ignore (aborts/network)
       } finally {
         if (abortRef.current === ctrl) abortRef.current = null;
       }
@@ -113,49 +91,36 @@ export default function TradingChart() {
     return () => {
       if (abortRef.current) { try { abortRef.current.abort(); } catch {} abortRef.current = null; }
     };
-  // IMPORTANT: only symbol & timeframe here to avoid unintended re-runs
-  }, [selectedSymbol, timeframe]);
+  }, [selectedSymbol, timeframe, setLastOHLC, setConnection]);
 
-  // ---- LIVE tail via SSE (IGNORE BOOTSTRAP to avoid repaint)
+  // live stream (only active instrument)
   const bridgeTF = TF_TO_BRIDGE[timeframe] || "H1";
 
   useBarsStream({
     symbol: selectedSymbol,
     timeframe: bridgeTF,
+    bars: 300,
 
-    // Ignore bootstrap entirely; history already set above
-    // onBootstrap: (bars) => {},
+    // ignore 'bootstrap' here (we already set history above)
 
     onUpdate: (bar) => {
       if (!apiRef.current) return;
-
-      // Deduplicate against the bar we already have
-      const last = lastBarRef.current;
-      if (
-        last &&
-        last.time === bar.time &&
-        last.open === bar.open &&
-        last.high === bar.high &&
-        last.low === bar.low &&
-        last.close === bar.close
-      ) {
-        return;
-      }
-
-      // Update tail only (same time = mutate, newer time = append)
       apiRef.current.series.update(bar);
-      lastBarRef.current = bar;
-      setOHLCFrameSafe(bar);
+      setLastOHLC?.({ o: bar.open, h: bar.high, l: bar.low, c: bar.close });
+      // update freshness *every* data message
+      setConnection?.({ lastMessageAt: Date.now() });
     },
 
-    onStatus: (s) => {
-      setConnection?.({ state: s, lastMessageAt: Date.now() });
+    onStatus: (state) => {
+      // just record the state; freshness is handled in onUpdate
+      setConnection?.({ state });
     },
+
+    idleMs: 20000,
   });
 
   return (
     <div className="h-[calc(100vh-112px)] md:h-[calc(100vh-96px)]">
-      {/* v5 autoSize handles layout changes without manual width/height writes */}
       <div ref={containerRef} className="w-full h-full bg-white" />
     </div>
   );

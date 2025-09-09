@@ -1,24 +1,24 @@
-"use client";
-import { createContext, useContext, useMemo, useState } from "react";
+// lib/store.js
+import { create } from "zustand";
 
-const Ctx = createContext(null);
+export const useStore = create((set) => ({
+  // selection
+  selectedSymbol: "EURUSD",
+  timeframe: "H1",
 
-export function StoreProvider({ children }) {
-  const [selectedSymbol, setSelectedSymbol] = useState(null);
-  const [timeframe, setTimeframe] = useState("1h"); // UI label
-  const [lastOHLC, setLastOHLC] = useState(null);
+  // last candle OHLC shown in InfoBar
+  lastOHLC: null,
 
-  const value = useMemo(() => ({
-    selectedSymbol, setSelectedSymbol,
-    timeframe, setTimeframe,
-    lastOHLC, setLastOHLC,
-  }), [selectedSymbol, timeframe, lastOHLC]);
+  // live stream connection status (Step 1)
+  // state: "connecting" | "live" | "idle" | "error"
+  connection: { state: "idle", lastMessageAt: null, lastError: null, seq: null },
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
-}
+  // setters
+  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
+  setTimeframe: (tf) => set({ timeframe: tf }),
+  setLastOHLC: (ohlc) => set({ lastOHLC: ohlc }),
 
-export function useStore() {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useStore must be used within StoreProvider");
-  return ctx;
-}
+  // Step 1: update stream connection snapshot
+  setConnection: (update) =>
+    set((s) => ({ connection: { ...s.connection, ...update } })),
+}));

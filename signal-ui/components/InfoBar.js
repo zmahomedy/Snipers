@@ -1,53 +1,57 @@
+// components/InfoBar.js
 "use client";
+
+import { useMemo } from "react";
 import { useStore } from "@/lib/store";
 
-export default function InfoBar({ onToggleSidebar }) {
+export default function InfoBar() {
   const { selectedSymbol, timeframe, lastOHLC, connection } = useStore();
-  const state = connection?.state || "idle";
 
-  const pillColor = {
-    live:  "bg-emerald-500",
-    idle:  "bg-gray-400",
-    error: "bg-rose-500",
-  }[state];
+  const pill = useMemo(() => {
+    const s = connection?.state || "idle";
+    const map = {
+      connecting: { cls: "bg-neutral-400", label: "Connecting" },
+      live:       { cls: "bg-emerald-500", label: "Live" },
+      idle:       { cls: "bg-amber-500", label: "Idle" },
+      error:      { cls: "bg-red-500", label: "Error" },
+    };
+    return map[s] || map.idle;
+  }, [connection?.state]);
 
-  const label = state === "live" ? "Live" : state === "error" ? "Error" : "Idle";
+  const staleFor = useMemo(() => {
+    const ts = connection?.lastMessageAt;
+    if (!ts) return null;
+    const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    return sec;
+  }, [connection?.lastMessageAt]);
+
+  const fmt = (v, d = 2) =>
+    v == null ? "—" : Number(v).toFixed(d);
 
   return (
-    <div className="w-full border-b bg-white/95 backdrop-blur px-3 py-2 flex items-center justify-between">
-      <div className="flex items-center gap-2">
-        {/* mobile toggle */}
-        <button
-          onClick={onToggleSidebar}
-          className="md:hidden -ml-1 inline-flex items-center justify-center w-8 h-8 rounded hover:bg-gray-100"
-          aria-label="Toggle market watch"
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path d="M3 6h18M3 12h18M3 18h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
-          </svg>
-        </button>
-
-        <div className="text-base md:text-lg font-semibold truncate max-w-[40vw] md:max-w-none">
-          {selectedSymbol ?? "Select a symbol"}
-        </div>
-        <div className="text-xs md:text-sm text-gray-500">{timeframe?.toUpperCase?.()}</div>
-
-        {lastOHLC && (
-          <div className="hidden md:flex text-sm text-gray-700 gap-3">
-            <span>O: {lastOHLC.o}</span>
-            <span>H: {lastOHLC.h}</span>
-            <span>L: {lastOHLC.l}</span>
-            <span>C: {lastOHLC.c}</span>
-          </div>
-        )}
+    <div className="flex items-center justify-between px-3 py-2 border-b bg-white text-sm">
+      <div className="flex items-center gap-3">
+        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs text-white ${pill.cls}`}>
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-white/90" />
+          {pill.label}
+        </span>
+        {connection?.state === "idle" && staleFor != null ? (
+          <span className="text-xs text-neutral-500">stale {staleFor}s</span>
+        ) : null}
+        {connection?.state === "error" && connection?.lastError ? (
+          <span className="text-xs text-red-600">({connection.lastError})</span>
+        ) : null}
       </div>
 
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 text-xs">
-          <span className={`inline-block w-2.5 h-2.5 rounded-full ${pillColor}`} />
-          <span className="text-gray-600">{label}</span>
+      <div className="flex items-center gap-4">
+        <span className="font-medium">{selectedSymbol}</span>
+        <span className="text-neutral-500">{timeframe}</span>
+        <div className="flex items-center gap-3 text-xs text-neutral-600">
+          <span>O {fmt(lastOHLC?.o, 5)}</span>
+          <span>H {fmt(lastOHLC?.h, 5)}</span>
+          <span>L {fmt(lastOHLC?.l, 5)}</span>
+          <span>C {fmt(lastOHLC?.c, 5)}</span>
         </div>
-        <div className="text-[10px] md:text-xs text-gray-400">Hist + Live</div>
       </div>
     </div>
   );
